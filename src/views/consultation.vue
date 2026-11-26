@@ -383,8 +383,6 @@ const startAIResponse = (sessionId, userMessage) => {
             }
         },
         onmessage: (event) => {
-            const raw = event.data.trim()
-            if (!raw) return
             const eventName = event.event
             // 当前会话的AI消息
             const aiMessage = messages.value[messages.value.length - 1]
@@ -396,17 +394,23 @@ const startAIResponse = (sessionId, userMessage) => {
                 loadSessionEmotion(currentSession.value.sessionId)
                 return
             }
-            const payload = JSON.parse(raw)
-            const ok = String(payload.code) === '200'
-            if (ok && payload.data && payload.data.content) {
+            if (!event.data) return
+            let payload
+            try {
+                payload = JSON.parse(event.data)
+            } catch (e) {
+                return
+            }
+            if (eventName === 'error' || String(payload.code) !== '200') {
+                failStream(payload.msg || payload.message || 'AI回复中断，请重试', ctrl)
+                return
+            }
+            if (payload.data && payload.data.content) {
                 aiMessage.content += payload.data.content
-            } else if (!ok) {
-                // 错误回复的显示
-                handleError(payload.message || 'AI回复失败')
             }
         },
         onerror: (err) => {
-            handleError(err || 'AI回复失败')
+            failStream('连接中断，请重试', ctrl)
             throw err
         },
         onclose: () => {
@@ -417,15 +421,21 @@ const startAIResponse = (sessionId, userMessage) => {
 
 }
 
-// 错误处理函数
-const handleError = (error) => {
-    // 当前会话的AI消息
+// 流式失败处理：保留已经收到的内容，追加中断提示，避免整段回复被覆盖
+const failStream = (error, ctrl) => {
+    const tip = typeof error === 'string' && error ? error : 'AI回复中断，请重试'
     const aiMessage = messages.value[messages.value.length - 1]
     if (aiMessage) {
-        aiMessage.content = 'AI回复失败，请重试'
+        aiMessage.content = aiMessage.content
+            ? `${aiMessage.content}\n\n（回答中断：${tip}）`
+            : tip
+        aiMessage.isError = true
     }
     isAiTyping.value = false
-    ElMessage.error('AI回复失败，请重试')
+    ElMessage.error(tip)
+    if (ctrl) {
+        ctrl.abort()
+    }
 }
 
 const getSessionPage = () => {
